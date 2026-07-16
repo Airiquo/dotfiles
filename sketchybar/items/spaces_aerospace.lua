@@ -6,13 +6,14 @@ local MAX_APPS = 8
 ---@type table<string, WsSlot>
 local slots = {}
 
+-- Constant cost regardless of workspace count: one call for the focused
+-- workspace, one for the list of all workspaces, and ONE call (not one
+-- per workspace) for every window across all of them, tagged by
+-- workspace via the %{workspace} format token.
 local AEROSPACE_QUERY = [[
-FOCUSED=$(aerospace list-workspaces --focused)
-echo "FOCUSED|$FOCUSED"
-for ws in $(aerospace list-workspaces --all); do
-  APPS=$(aerospace list-windows --workspace "$ws" --format '%{app-name}' 2>/dev/null | tr '\n' ',')
-  echo "WS|$ws|$APPS"
-done
+echo "FOCUSED|$(aerospace list-workspaces --focused)"
+aerospace list-workspaces --all | while IFS= read -r ws; do echo "WS|$ws"; done
+aerospace list-windows --all --format '%{workspace}|%{app-name}' | while IFS= read -r line; do echo "WIN|$line"; done
 ]]
 
 local function name_num(ws) return "aerospace.ws." .. ws .. ".num" end
@@ -160,14 +161,16 @@ local function refresh_full()
             if kind == "FOCUSED" then
                 focused = rest:gsub("%s+$", "")
             elseif kind == "WS" then
-                local ws, apps_str = rest:match("^([^|]*)|(.*)$")
-                if ws and ws ~= "" then
+                local ws = rest:gsub("%s+$", "")
+                if ws ~= "" then
                     table.insert(ws_list, ws)
-                    local apps = {}
-                    for app in (apps_str or ""):gmatch("[^,]+") do
-                        table.insert(apps, app)
-                    end
-                    ws_apps[ws] = apps
+                    ws_apps[ws] = ws_apps[ws] or {}
+                end
+            elseif kind == "WIN" then
+                local ws, app = rest:match("^([^|]*)|(.*)$")
+                if ws and ws ~= "" then
+                    ws_apps[ws] = ws_apps[ws] or {}
+                    table.insert(ws_apps[ws], app)
                 end
             end
         end
@@ -184,18 +187,11 @@ local watcher = Sbar.add("item", "aerospace.watcher", {
     padding_right = 0,
 })
 
--- Cheap highlight-only flip: runs on EVERY focus/workspace change, near
--- zero cost (one CLI call, no matter how many windows/workspaces exist).
 watcher:subscribe(
     { "aerospace_workspace_change", "aerospace_focus_change", "system_woke", "forced" },
     refresh_focus
 )
 
--- Expensive full re-scan (every workspace, every window): now ONLY runs
--- on an actual workspace switch, not plain window-to-window focus moves
--- within the same workspace. This is the fix for the rapid-switching
--- thermal spike -- alt-tabbing between two already-open windows no
--- longer triggers a full re-scan of every workspace's icons.
 watcher:subscribe(
     { "aerospace_workspace_change", "system_woke", "forced" },
     refresh_full

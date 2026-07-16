@@ -76,9 +76,35 @@ local media_title  = Sbar.add("item", "media.title", {
     },
 })
 
+local media_cava = Sbar.add("item", "media.cava", {
+    position      = "right",
+    drawing       = false,
+    padding_left  = 0,
+    padding_right = 4,
+    icon          = { drawing = false },
+    label         = {
+        string   = "",
+        font     = { family = "SF Mono", style = "Bold", size = 11 },
+        color    = colors.puce,
+        y_offset = 0,
+        width    = 110,
+        align    = "left",
+    },
+    popup = {
+        align  = "center",
+        height = 30,
+        background = {
+            border_width = 1,
+            border_color = colors.bg2,
+            color        = colors.bg1,
+        },
+    },
+})
+
 local mbracket     = Sbar.add("bracket", "media.bracket", {
     media_artist.name,
     media_title.name,
+    media_cava.name,
     media_cover.name,
 }, {
     background = {
@@ -126,12 +152,75 @@ local fwd = Sbar.add("item", {
     click_script = "osascript -e 'tell application \"Spotify\" to next track'",
 })
 
+-- ============================================================
+-- Volume popup, attached to the cava item specifically
+-- ============================================================
+local popup_vol_slider = Sbar.add("slider", 120, {
+    position = "popup." .. media_cava.name,
+    updates  = true,
+    label    = { drawing = false },
+    icon     = { drawing = false },
+    padding_left  = 4,
+    padding_right = 0,
+    slider = {
+        highlight_color = colors.blue,
+        width = 120,
+        background = {
+            height = 6,
+            corner_radius = 3,
+            color = colors.with_alpha(colors.white, 0.3),
+        },
+        knob = {
+            string = "●",
+            drawing = true,
+        },
+    },
+})
 
+local function vol_icon_for(volume)
+    if volume > 60 then return icons.volume._100
+    elseif volume > 30 then return icons.volume._66
+    elseif volume > 10 then return icons.volume._33
+    elseif volume > 0 then return icons.volume._10
+    else return icons.volume._0 end
+end
+
+local function hide_cava_popup()
+    media_cava:set({ popup = { drawing = false } })
+end
+
+local function toggle_cava_popup()
+    local should_draw = media_cava:query().popup.drawing == "off"
+    media_cava:set({ popup = { drawing = should_draw } })
+end
+
+media_cava:subscribe("mouse.clicked", toggle_cava_popup)
+media_cava:subscribe("mouse.exited.global", hide_cava_popup)
+
+popup_vol_slider:subscribe("mouse.clicked", function(env)
+    local pct = tonumber(env["PERCENTAGE"])
+    Sbar.exec("osascript -e 'set volume output volume " .. env["PERCENTAGE"] .. "'")
+    if pct then
+        popup_vol_slider:set({ slider = { percentage = pct } })
+    end
+end)
+
+popup_vol_slider:subscribe("volume_change", function(env)
+    local volume = tonumber(env.INFO)
+    if not volume or volume <= 0 then return end
+    popup_vol_slider:set({ slider = { percentage = volume } })
+end)
+
+Sbar.exec("osascript -e 'output volume of (get volume settings)'", function(vol)
+    local volume = tonumber(vol)
+    if not volume or volume <= 0 then return end
+    popup_vol_slider:set({ slider = { percentage = volume } })
+end)
 
 local interrupt = 0
 
 -- ============================================================
--- Mouse events
+-- Mouse events (media bracket popup)
 -- ============================================================
 local function hide_popup()
     mbracket:set({ popup = { drawing = false } })
@@ -147,6 +236,31 @@ media_artist:subscribe("mouse.clicked", toggle_popup)
 media_title:subscribe("mouse.clicked", toggle_popup)
 
 media_cover:subscribe("mouse.exited.global", hide_popup)
+
+-- ============================================================
+-- Cava (only runs while Spotify is actually playing)
+-- ============================================================
+Sbar.exec("sketchybar --add event cava_update")
+
+local cava_running = false
+
+local function stop_cava()
+    if cava_running then
+        Sbar.exec("killall cava_bar.sh cava >/dev/null 2>&1")
+        cava_running = false
+    end
+end
+
+local function start_cava()
+    if not cava_running then
+        Sbar.exec("$CONFIG_DIR/helpers/event_providers/cava_bar/cava_bar.sh &")
+        cava_running = true
+    end
+end
+
+media_cava:subscribe("cava_update", function(env)
+    media_cava:set({ label = { string = env.bars or "" } })
+end)
 
 -- ============================================================
 -- Refresh
@@ -196,11 +310,15 @@ local function refresh()
             local max_len = math.max(#artist, #title)
             media_title:set({ drawing = playing, label = { string = title, align = "right" }})
             media_cover:set({ drawing = playing })
+            media_cava:set({ drawing = playing })
 
             if playing then
                 set_artwork(url)
+                start_cava()
             else
                 hide_popup()
+                hide_cava_popup()
+                stop_cava()
             end
         end)
     end)

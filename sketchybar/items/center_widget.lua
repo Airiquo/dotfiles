@@ -1,13 +1,7 @@
 local colors   = require("colors")
 local settings = require("settings")
 
-local IDLE_SECONDS      = 3
-local FRESHNESS_SECONDS = 5
-
 local FOCUS_QUERY = "aerospace list-windows --focused --format '%{app-name}|%{window-title}' 2>/dev/null"
-
-Sbar.exec("killall cava_bar.sh >/dev/null; $CONFIG_DIR/helpers/event_providers/cava_bar/cava_bar.sh &")
-Sbar.exec("sketchybar --add event aerospace_focus_change")
 
 local widget = Sbar.add("item", "widgets.center", {
   position = "center",
@@ -26,18 +20,7 @@ local widget = Sbar.add("item", "widgets.center", {
   padding_right = settings.paddings,
 })
 
-local generation      = 0
-local is_playing      = false
-local last_playing_ts = 0
-local cava_bars       = ""
-local showing_cava    = false
-
-local function currently_playing()
-  return is_playing and (os.time() - last_playing_ts) < FRESHNESS_SECONDS
-end
-
 local function render_focused(app, title)
-  showing_cava = false
   if not app or app == "" then
     widget:set({
       icon  = { background = { drawing = false } },
@@ -68,18 +51,6 @@ local function render_focused(app, title)
   })
 end
 
-local function render_cava()
-  showing_cava = true
-  widget:set({
-    icon  = { background = { drawing = false } },
-    label = {
-      string = cava_bars,
-      color  = colors.puce,
-      font   = { family = "SF Mono", style = "Bold", size = 13.0 },
-    },
-  })
-end
-
 local function refresh_focused()
   Sbar.exec(FOCUS_QUERY, function(out)
     if not out then render_focused(nil, nil); return end
@@ -90,31 +61,12 @@ local function refresh_focused()
   end)
 end
 
-local function on_focus_activity()
-  generation = generation + 1
-  local my_generation = generation
-  refresh_focused()
-  Sbar.delay(IDLE_SECONDS, function()
-    if generation ~= my_generation then return end
-    if currently_playing() then render_cava() end
-  end)
-end
-
-widget:subscribe(
+Sbar.add("item", "widgets.center.watcher", {
+  drawing = false,
+  updates = true,
+}):subscribe(
   { "aerospace_focus_change", "aerospace_workspace_change", "system_woke", "forced" },
-  on_focus_activity
+  refresh_focused
 )
 
-widget:subscribe("cava_update", function(env)
-  cava_bars  = env.bars or ""
-  is_playing = (env.playing == "1")
-  if is_playing then last_playing_ts = os.time() end
-  -- Live-update every incoming frame, but only while cava is actually
-  -- the visible mode — avoids pointless :set() calls while the widget
-  -- is showing the focused window instead.
-  if showing_cava then
-    widget:set({ label = { string = cava_bars } })
-  end
-end)
-
-Sbar.delay(0.5, on_focus_activity)
+Sbar.delay(0.5, refresh_focused)
